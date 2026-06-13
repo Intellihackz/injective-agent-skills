@@ -4,10 +4,11 @@ description: >-
   Integrate Injective RFQ taker flows into browser apps and operational quote
   monitors. Use this skill when building, reviewing, or debugging RFQ gateway
   autosign settlement, Web3Gateway AuthZ setup, manual TakerStream quote
-  collection, RFQ open/close flows, conditional TP/SL intents, quote uptime
-  probes, market-readiness checks, or mainnet RFQ frontend integrations.
-  Covers mainnet parameters, canonical decimals, quote windows, signer slots,
-  market discovery, quote-hit diagnostics, and production RFQ gotchas.
+  collection, RFQ open/close flows, gateway prefetch, optimistic position
+  updates, conditional TP/SL intents, quote uptime probes, market-readiness
+  checks, or mainnet RFQ frontend integrations. Covers mainnet parameters,
+  canonical decimals, quote windows, signer slots, market discovery,
+  quote-hit diagnostics, and production RFQ gotchas.
 license: MIT
 metadata:
   author: ck
@@ -51,11 +52,14 @@ Use the gateway autosign path for production browser trading:
 5. Call `IndexerGrpcRfqGwApi.fetchPrepareAutoSign`.
 6. Sign the returned `TxRaw` exactly as received.
 7. Insert both autosign and fee-payer signatures in decoded signer order.
-8. Broadcast and poll the tx before reporting success.
+8. Broadcast and poll the tx for final reconciliation.
 
-Use manual TakerStream only for diagnostics, special routing, or quote uptime
-checks. It exposes ACK/quote timing but does not return a prepared settlement
-transaction.
+Use manual TakerStream only for diagnostics, special routing, quote uptime
+checks, or latency-sensitive liquidation/arbitrage flows that need maker
+allowlists/denylists. It exposes ACK/quote timing and raw maker identity; if
+you accept manually, prefetch account sequence and timeout height before quote
+collection so the signed accept tx can be broadcast immediately after selecting
+a quote.
 
 ## Production Rules
 
@@ -73,7 +77,37 @@ transaction.
 - Position close is RFQ too: opposite direction, same quantity, `margin: "0"`.
 - After a successful close, cancel active TP/SL intent lanes for that market.
 - Keep quote collection windows short. Production retail flows should start
-  with `500 ms`.
+  with `500 ms`. Latency-sensitive taker bots can use `50-100 ms`, but should
+  measure quote hit rate because some makers respond slower than 50 ms.
+- For maker-routed flows, expose `onlyMakers`, `excludeMakers`, `minTtlMs`,
+  `collectMs`, `priceCheck`, and `gasLimit` as explicit operational knobs.
+- Direct RFQ accept paths should default near `2_000_000` gas. Mainnet
+  synthetic executions have used about `1.34M` gas, so `1_000_000` can fail
+  before revealing the maker's semantic error.
+- Do not import `TxInclusionStrategy` or set `txInclusion` unless the installed
+  SDK actually exports it. A missing export breaks Vite at runtime.
+
+## Fast Gateway Execution
+
+For a snappy browser UI, prefetch RFQ gateway orders when form inputs are valid
+and stable, then reuse the prepared order on submit only if all submission
+dependencies still match.
+
+- Gate prefetch behind an explicit user or app setting. Background prepare
+  traffic is useful, but it should be observable and easy to disable.
+- Debounce and limit prefetches. Restart when quantity, worst price, direction,
+  market, margin, leverage, subaccount, autosign address, or account sequence
+  changes.
+- Cache prepared gateway orders with a short TTL and a dependency fingerprint.
+  Treat account sequence changes as invalidation.
+- Consume a prepared order once a submit path uses it. Never reuse the same
+  prepared tx or RFQ payload for a later click.
+- If a matching prefetch is in flight on submit, wait only behind a bounded
+  timeout. Fall back to click-time prepare when it stalls.
+- Build close-position prepared orders with the same gateway path: opposite
+  direction, position quantity, `margin: "0"`, and a worst-price guardrail.
+- Track prepare lifecycle in observability: requested, skipped, cache hit,
+  cache miss, stale dependency, timeout, success, and failure.
 
 ## RFQ Input Rules
 
@@ -93,6 +127,54 @@ For closes:
 Worst price is a guardrail, not an expected execution price. Seeing better
 quotes than `mark +/- slippage` is normal.
 
+## Optimistic Position UX
+
+Optimistic RFQ frontend execution means updating user-visible state at gateway
+match time, then reconciling against the chain and indexer. Chain-side
+optimistic execution can make settlement faster, but the UI must still treat
+pre-confirmation state as provisional.
+
+- Show the submitted toast immediately on click, before slow validation,
+  prepare, signing, or broadcast work.
+- When the gateway returns matched quote details, emit the filled toast
+  immediately and update the positions table before chain confirmation.
+- Use the matched quote response for filled quantity and average price. Do not
+  display requested quantity in fallback filled or settled toasts.
+- Keep the chain-success toast quiet when a matched filled toast already fired.
+- On a post-match broadcast or chain failure, roll back the optimistic position
+  and show exactly one error toast: `Order reverted, please try again.`
+- Suppress duplicate generic errors from the same failure path, such as
+  `Contract execution failed`, once the revert toast has been shown.
+- Preserve optimistic positions across market switches, stream restarts, and
+  initial refetches until real indexer data confirms or invalidates them.
+- Clear optimistic state on real position insert/update/delete for that market,
+  explicit rollback, account reset, or expiry.
+- While a market has an active optimistic position, keep stream suppression
+  timers re-armed instead of letting stale fetched rows replace the provisional
+  row.
+- Disable close-position actions for optimistic rows until the position is
+  confirmed by chain/indexer data.
+
+Focused tests should cover event order, immediate submitted toast, matched
+toast before broadcast completion, prepared-order reuse and consumption, stale
+dependency invalidation, in-flight prefetch timeout, rollback, duplicate error
+suppression, stream restart preservation, and disabled close actions.
+
+## Maker Routing And Short TTL
+
+When a flow must avoid specific makers, use manual TakerStream quote
+collection and accept only filtered quotes. Gateway settlement is still the
+recommended browser path, but if the gateway accepts the first quote from a
+distressed or underfunded maker, the whole settlement can fail. Track quote
+diagnostics per maker: maker address, price, quantity, TTL at selection,
+rejection reason, and on-chain execution error.
+
+For makers with sub-second or low-second TTLs, avoid post-quote RPCs. Prefetch
+account sequence and timeout height, collect for the minimum usable window,
+build the accept message locally, and broadcast immediately. A quote with
+about `1.4s` TTL can expire if you wait `500 ms` and then fetch sequence/block
+height after selection.
+
 ## AuthZ Setup
 
 Use Web3Gateway fee payer for wallet-signed setup transactions so users do not
@@ -108,6 +190,17 @@ Grant two groups:
   `/cosmos.bank.v1beta1.MsgSend`
 
 If setup asks users to pay gas, the integration is bypassing Web3Gateway.
+
+## Known Maker Failure Modes
+
+Record maker-level RFQ errors instead of collapsing all quote failures into a
+single settlement error. Useful categories observed on mainnet include:
+
+- maker position below maintenance, often from a liquidated account still
+  quoting
+- insufficient maker balance for the quote minimum quantity
+- quote expired before the execution block
+- out of gas before maker semantic checks completed
 
 ## Quote Probe / Uptime Mode
 
