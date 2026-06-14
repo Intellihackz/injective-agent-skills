@@ -60,6 +60,22 @@ npx skills add InjectiveLabs/agent-skills --skill injective-rfq-integrations
 See [`skills/injective-rfq-integrations`](./skills/injective-rfq-integrations/README.md)
 for more information.
 
+## injective-usdc-integration
+
+Integrate native USDC on Injective into apps, wallets, bridge widgets, and
+trading systems. Covers Circle CCTP V2 deposits and withdrawals, Injective EVM
+address to Cosmos denom mapping, source-chain CCTP constants, USDC market
+selection, migration from USDT or bridged USDC, and frontend recovery gotchas.
+
+Install via NPM:
+
+```bash
+npx skills add InjectiveLabs/agent-skills --skill injective-usdc-integration
+```
+
+See [`skills/injective-usdc-integration`](./skills/injective-usdc-integration/README.md)
+for more information.
+
 ## injective-mcp-servers
 
 Set up and use MCP servers that are important for Injective.
