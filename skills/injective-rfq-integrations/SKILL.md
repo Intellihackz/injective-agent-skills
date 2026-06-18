@@ -4,11 +4,12 @@ description: >-
   Integrate Injective RFQ taker flows into browser apps and operational quote
   monitors. Use this skill when building, reviewing, or debugging RFQ gateway
   autosign settlement, Web3Gateway AuthZ setup, manual TakerStream quote
-  collection, RFQ open/close flows, gateway prefetch, optimistic position
-  updates, conditional TP/SL intents, quote uptime probes, market-readiness
-  checks, or mainnet RFQ frontend integrations. Covers mainnet parameters,
-  canonical decimals, quote windows, signer slots, market discovery,
-  quote-hit diagnostics, and production RFQ gotchas.
+  collection, client-side gateway-style quote selection, RFQ open/close flows,
+  gateway prefetch, optimistic position updates, conditional TP/SL intents,
+  quote uptime probes, market-readiness checks, or mainnet RFQ frontend
+  integrations. Covers mainnet parameters, canonical decimals, quote windows,
+  signer slots, market discovery, quote-hit diagnostics, and production RFQ
+  gotchas.
 license: MIT
 metadata:
   author: ck
@@ -18,9 +19,9 @@ metadata:
 # Injective RFQ Integrations
 
 Use this skill when adding Injective RFQ to a frontend or when building an RFQ
-quote monitoring tool. Keep the main flow simple: prefer the RFQ gateway for
-trade settlement, and use manual TakerStream only when you need raw quote
-diagnostics.
+quote monitoring tool. Keep the main flow simple: use the RFQ gateway when you
+want managed settlement, and use client-side gateway mode only when the app is
+ready to own quote collection, selection, broadcast timing, and reconciliation.
 
 ## Mainnet Parameters
 
@@ -42,7 +43,9 @@ EVM chain ID used in EIP-712 domains, Web3Gateway signatures, and
 
 ## Choose The Path
 
-Use the gateway autosign path for production browser trading:
+Use the managed gateway autosign path for production browser trading when
+latency is acceptable and you want the backend gateway to own quote collection
+and settlement assembly:
 
 1. Connect an EVM wallet and derive the user's Injective address.
 2. Create a local ephemeral autosign key for that wallet.
@@ -54,12 +57,44 @@ Use the gateway autosign path for production browser trading:
 7. Insert both autosign and fee-payer signatures in decoded signer order.
 8. Broadcast and poll the tx for final reconciliation.
 
-Use manual TakerStream only for diagnostics, special routing, quote uptime
-checks, or latency-sensitive liquidation/arbitrage flows that need maker
-allowlists/denylists. It exposes ACK/quote timing and raw maker identity; if
-you accept manually, prefetch account sequence and timeout height before quote
-collection so the signed accept tx can be broadcast immediately after selecting
-a quote.
+Use client-side gateway mode when the browser needs lower click-time latency or
+special quote selection. In that mode, the app is moving gateway/indexer duties
+to the client: TakerStream request ownership, ACK mapping, quote collection,
+quote selection, accept transaction preparation, per-wallet serialization,
+optimistic state, and chain/indexer reconciliation. Read
+[references/client-side-gateway.md](./references/client-side-gateway.md)
+before implementing it.
+
+Use manual TakerStream diagnostics when you only need raw quote behavior,
+maker identity, or quote uptime checks. Diagnostics should not silently turn
+into settlement; settlement requires all client-side gateway responsibilities.
+
+## Client-Side Gateway Mode
+
+Client-side gateway mode is a latency optimization, not just a transport
+choice. The gateway behaves like a coordinator/indexer: it opens RFQs, tracks
+ACKs, collects maker quotes, chooses executable quotes, assembles settlement,
+and reconciles state. A browser implementation must replace those duties
+explicitly instead of only opening a WebSocket.
+
+- Keep one active taker stream owner per wallet/session and reconnect
+  deliberately on wallet changes.
+- Track `clientId -> rfqId` ACK replacement. Quotes can arrive before ACK, and
+  ACK ids may differ from local client ids.
+- Use short, bounded collection windows. Start the window from ACK or the first
+  matching quote, not from arbitrary UI time.
+- Sort executable quotes deterministically: lower price is better for long
+  takers, higher price is better for short takers.
+- Validate quote freshness, signed payload fields, maker eligibility, market,
+  direction, quantity, TTL, chain ids, contract, and worst-price guardrails.
+- Prefetch account sequence and timeout height before selection when quote TTLs
+  are tight. Avoid post-selection RPCs in sub-second paths.
+- Serialize accepts per wallet. Parallel accepts can race account sequence even
+  when they target different markets.
+- Treat optimistic position state as provisional until chain/indexer data
+  confirms it. Roll back cleanly on post-match broadcast or chain failure.
+- Keep a managed gateway fallback or recovery path unless the product has
+  operational monitoring for quote hit rate, maker failures, and stuck state.
 
 ## Production Rules
 
@@ -130,6 +165,21 @@ of user-facing states and serialize trade submission:
 - If a UI searches markets, prefer scroll-and-highlight over filtering cards out
   of the grid. Filtering can resize the target card and make the trading form
   feel unstable.
+
+## Prequote Price Semantics
+
+Separate display prices from RFQ guardrails:
+
+- Button prices should show the best live maker quote when available.
+- Fallback display prices can use index price plus or minus the user's
+  slippage setting, but label them as estimates.
+- Prequote RFQ `worstPrice` does not have to equal user slippage. A client-side
+  gateway can use tighter RFQ prequote tiers for quote discovery, then escalate
+  after misses.
+- User slippage still belongs in final submit guardrails and can affect sizing
+  indirectly when quantity is derived from quote notional.
+- Worst price is a guardrail, not an expected execution price. Seeing better
+  maker quotes than the guardrail is normal.
 
 ## RFQ Input Rules
 
@@ -258,6 +308,8 @@ editing or canceling a lane, re-query before signing fresh intents.
 
 ## References
 
+- [references/client-side-gateway.md](./references/client-side-gateway.md): moving
+  gateway/indexer duties into a browser latency path.
 - [references/frontend-rfq-flow.md](./references/frontend-rfq-flow.md): gateway vs manual
   TakerStream, quote filters, and signer rules.
 - [references/authz-and-autosign.md](./references/authz-and-autosign.md): Web3Gateway
