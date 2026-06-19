@@ -10,6 +10,8 @@ add Injective RFQ taker flows:
 - user grants scoped AuthZ once through Web3Gateway fee payer
 - app sends RFQs with a short quote collection window
 - app settles through the RFQ gateway prepared autosign transaction path
+- advanced apps can move gateway-style quote collection and selection into the
+  browser when latency requires it
 - position close is the same RFQ path with `margin: "0"`
 - TP/SL uses signed RFQ conditional close intents, not orderbook reduce-only
   orders
@@ -24,15 +26,17 @@ Read these in order:
 1. [SKILL.md](./SKILL.md) - the full implementation playbook.
 2. [references/architecture.md](./references/architecture.md) - flow diagrams and state
    boundaries.
-3. [references/frontend-rfq-flow.md](./references/frontend-rfq-flow.md) - quote windows,
+3. [references/client-side-gateway.md](./references/client-side-gateway.md) -
+   moving gateway/indexer duties into a browser latency path.
+4. [references/frontend-rfq-flow.md](./references/frontend-rfq-flow.md) - quote windows,
    ACKs, gateway settlement, and manual TakerStream collection.
-4. [references/quote-probe-uptime.md](./references/quote-probe-uptime.md) - quote uptime
+5. [references/quote-probe-uptime.md](./references/quote-probe-uptime.md) - quote uptime
    probes, market discovery, fanout limits, and frontend eligibility signals.
-5. [references/authz-and-autosign.md](./references/authz-and-autosign.md) - grants,
+6. [references/authz-and-autosign.md](./references/authz-and-autosign.md) - grants,
    ephemeral keys, Web3Gateway fee-payer setup.
-6. [references/conditional-tpsl.md](./references/conditional-tpsl.md) - RFQ
+7. [references/conditional-tpsl.md](./references/conditional-tpsl.md) - RFQ
    TP/SL signed intents.
-7. [references/troubleshooting.md](./references/troubleshooting.md) - common failures.
+8. [references/troubleshooting.md](./references/troubleshooting.md) - common failures.
 
 ## Recommended Integration Path
 
@@ -47,8 +51,9 @@ Most frontend partners should use the RFQ gateway autosign flow:
 6. Broadcast via `TxGrpcApi.broadcast`.
 7. For TP/SL, sign `SignedTakerIntent` EIP-712 and submit conditional orders.
 
-Use the lower-level TakerStream sample only when you need to manually inspect
-ACKs and quotes in the browser.
+Use client-side gateway mode only when latency or custom quote selection is
+worth owning ACK mapping, quote filtering, sequence readiness, broadcast timing,
+optimistic state, and reconciliation in the browser.
 
 ## Production Lessons
 
